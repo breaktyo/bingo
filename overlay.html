@@ -1,0 +1,384 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Bingo overlay</title>
+<style>
+  html, body { margin: 0; height: 100%; background: transparent; overflow: hidden; }
+  body { font-family: "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif; }
+  #wrap { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; transition: opacity .4s ease; }
+  #wrap.hidden { opacity: 0; }
+  #title { font-weight: 800; text-align: center; color: var(--text); text-shadow: 0 2px 6px rgba(0,0,0,.65); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 100%; }
+  #board { position: relative; }
+  #grid { position: absolute; inset: 0; display: grid; }
+  .cell { position: relative; overflow: hidden; box-sizing: border-box; display: flex; align-items: center; justify-content: center; text-align: center;
+          background: var(--cellbg); border: var(--bw) solid var(--border); border-radius: var(--radius); }
+  .cell .txt { box-sizing: border-box; padding: 6%; max-width: 100%; max-height: 100%; color: var(--text); font-weight: 700; line-height: 1.12;
+               overflow-wrap: normal; word-break: normal; text-shadow: 0 1px 2px rgba(0,0,0,.4); }
+  .cell .txt.wrap { overflow-wrap: anywhere; }
+  .cell.marked .txt { opacity: .5; transition: opacity .3s; }
+  .cell .media { position: absolute; inset: 0; z-index: 2; overflow: hidden; background: #000; }
+  .cell .media > img, .cell .media > video { width: 100%; height: 100%; object-fit: cover; display: block; }
+  svg.x { position: absolute; left: 10%; top: 10%; width: 80%; height: 80%; z-index: 3; pointer-events: none; overflow: visible; }
+  svg.x line { stroke: var(--accent); stroke-width: 11; stroke-linecap: round; filter: drop-shadow(0 0 3px rgba(0,0,0,.6)); }
+  .draw { stroke-dasharray: 1; stroke-dashoffset: 1; animation: draw .28s ease-out forwards; }
+  .draw.d2 { animation-delay: .22s; }
+  @keyframes draw { to { stroke-dashoffset: 0; } }
+  #lines { position: absolute; inset: 0; z-index: 4; pointer-events: none; overflow: visible; }
+  #lines line { stroke: var(--accent); stroke-linecap: round; filter: drop-shadow(0 0 4px rgba(0,0,0,.7)); }
+  #lines line.draw { animation-duration: .6s; }
+  #boardmedia { position: absolute; inset: 0; z-index: 5; overflow: hidden; border-radius: var(--radius); display: none; background: #000; }
+  #boardmedia > img, #boardmedia > video { width: 100%; height: 100%; object-fit: cover; display: block; }
+  #note { position: absolute; left: 8px; bottom: 8px; z-index: 9; font: 13px/1.35 system-ui, sans-serif; color: #fff;
+          background: rgba(0,0,0,.72); padding: 6px 10px; border-radius: 6px; max-width: calc(100% - 36px); display: none; }
+</style>
+</head>
+<body>
+<div id="wrap" class="hidden">
+  <div id="title"></div>
+  <div id="board">
+    <div id="grid"></div>
+    <svg id="lines"></svg>
+    <div id="boardmedia"></div>
+  </div>
+</div>
+<div id="note"></div>
+<script src="mqtt.min.js"></script>
+<script>
+(function () {
+  'use strict';
+
+  // ---------- konfiguracja z linku (wszystko jest po '#', więc nie trafia do serwera) ----------
+  var DEFAULT_BROKERS = ['wss://broker.emqx.io:8084/mqtt', 'wss://broker.hivemq.com:8884/mqtt', 'wss://test.mosquitto.org:8081/mqtt'];
+  var hp = new URLSearchParams(location.hash.slice(1));
+  var CH = hp.get('c') || '';
+  var KEY_AES = hp.get('k') || '';
+  var KEY_PUB = hp.get('p') || '';
+  var PREVIEW = hp.get('preview') === '1';
+  var DEBUG = PREVIEW || hp.get('debug') === '1';
+  var BROKERS = (hp.get('b') ? hp.get('b').split(',') : DEFAULT_BROKERS).filter(function (u) { return /^wss?:\/\//i.test(u); });
+  var TOPIC = 'kbingo/v1/' + CH;
+
+  var noteEl = document.getElementById('note');
+  function note(msg, always) {
+    if (!DEBUG && !always) return;
+    noteEl.textContent = msg; noteEl.style.display = msg ? 'block' : 'none';
+  }
+
+  // ---------- pomocnicze ----------
+  var te = new TextEncoder(), td = new TextDecoder();
+  function b64u(buf) { var s = '', b = new Uint8Array(buf); for (var i = 0; i < b.length; i++) s += String.fromCharCode(b[i]); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
+  function unb64u(str) { str = str.replace(/-/g, '+').replace(/_/g, '/'); while (str.length % 4) str += '='; var s = atob(str), b = new Uint8Array(s.length); for (var i = 0; i < s.length; i++) b[i] = s.charCodeAt(i); return b; }
+  function clamp(v, a, b, d) { v = Number(v); return isFinite(v) ? Math.min(b, Math.max(a, v)) : d; }
+  function hex(v, d) { return (typeof v === 'string' && /^#[0-9a-fA-F]{6}$/.test(v)) ? v : d; }
+  function rgba(h, a) { var n = parseInt(h.slice(1), 16); return 'rgba(' + (n >> 16 & 255) + ',' + (n >> 8 & 255) + ',' + (n & 255) + ',' + a + ')'; }
+  function safeUrl(u) {
+    if (typeof u !== 'string') return '';
+    u = u.trim(); if (!u) return '';
+    if (/^https:\/\//i.test(u)) return u;
+    if (!/^[a-z][a-z0-9+.-]*:/i.test(u) && u.indexOf('//') !== 0) { try { return new URL(u, location.href).href; } catch (e) { return ''; } }
+    return '';
+  }
+  function isVideo(u) { return /\.(mp4|webm|mov|m4v|ogv)(\?|#|$)/i.test(u); }
+  function wait(ms) { return new Promise(function (r) { setTimeout(r, ms); }); }
+
+  if (!CH || !KEY_AES || !KEY_PUB || !window.crypto || !crypto.subtle || !window.mqtt) {
+    note('Bingo: niepełny link do overlayu (albo strona nie jest otwarta przez https). Skopiuj link ponownie z panelu.', true);
+    return;
+  }
+
+  var aesKey, pubKey;
+  Promise.all([
+    crypto.subtle.importKey('raw', unb64u(KEY_AES), { name: 'AES-GCM' }, false, ['encrypt', 'decrypt']),
+    crypto.subtle.importKey('raw', unb64u(KEY_PUB), { name: 'ECDSA', namedCurve: 'P-256' }, false, ['verify'])
+  ]).then(function (k) { aesKey = k[0]; pubKey = k[1]; connect(); })
+    .catch(function () { note('Bingo: uszkodzony link (klucze). Skopiuj link ponownie z panelu.', true); });
+
+  // ---------- połączenie ----------
+  var clients = [], lastSeq = 0, chain = Promise.resolve(), pending = 0;
+  var instanceId = b64u(crypto.getRandomValues(new Uint8Array(6)));
+
+  function connect() {
+    note('Łączenie…');
+    BROKERS.forEach(function (url) {
+      var c = mqtt.connect(url, { clientId: 'kbo_' + b64u(crypto.getRandomValues(new Uint8Array(8))), clean: true, reconnectPeriod: 4000, connectTimeout: 8000, keepalive: 30 });
+      c.on('connect', function () { c.subscribe(TOPIC + '/state', { qos: 1 }); updNote(); sendAck(); });
+      c.on('close', updNote);
+      c.on('error', function () {});
+      c.on('message', function (topic, payload) {
+        if (pending > 30) return; // ochrona przed zalewem śmieci
+        pending++;
+        chain = chain.then(function () { return handle(payload); }).catch(function () {}).then(function () { pending--; });
+      });
+      clients.push(c);
+    });
+    setInterval(sendAck, 10000);
+  }
+  function connectedCount() { return clients.filter(function (c) { return c.connected; }).length; }
+  function updNote() {
+    if (!DEBUG) return;
+    var n = connectedCount();
+    if (!cur) note(n ? 'Połączono (' + n + '/' + clients.length + '), czekam na planszę z panelu…' : 'Łączenie…');
+    else note(n ? '' : 'Brak połączenia, ponawiam…');
+  }
+
+  function handle(payload) {
+    var o;
+    try { o = JSON.parse(td.decode(payload)); } catch (e) { return; }
+    if (!o || typeof o.s !== 'number' || typeof o.iv !== 'string' || typeof o.ct !== 'string' || typeof o.sig !== 'string') return;
+    if (o.s <= lastSeq || o.ct.length > 200000) return;
+    var signed = te.encode(CH + '|' + o.s + '|' + o.iv + '|' + o.ct);
+    return crypto.subtle.verify({ name: 'ECDSA', hash: 'SHA-256' }, pubKey, unb64u(o.sig), signed).then(function (ok) {
+      if (!ok || o.s <= lastSeq) return;
+      return crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64u(o.iv), additionalData: te.encode(CH + '|' + o.s) }, aesKey, unb64u(o.ct)).then(function (pt) {
+        var st = sanitize(JSON.parse(td.decode(pt)));
+        if (!st) return;
+        lastSeq = o.s;
+        var first = !cur;
+        apply(st, !first);
+        if (first) updNote();
+        sendAck();
+      });
+    });
+  }
+
+  function sendAck() {
+    if (!aesKey) return;
+    var iv = crypto.getRandomValues(new Uint8Array(12));
+    var body = te.encode(JSON.stringify({ id: instanceId, s: lastSeq, pv: PREVIEW ? 1 : 0, t: Date.now() }));
+    crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv, additionalData: te.encode(CH + '|ack') }, aesKey, body).then(function (ct) {
+      var msg = JSON.stringify({ iv: b64u(iv), ct: b64u(ct) });
+      clients.forEach(function (c) { if (c.connected) c.publish(TOPIC + '/ack', msg, { qos: 0 }); });
+    }).catch(function () {});
+  }
+
+  // ---------- walidacja stanu ----------
+  function sanitize(s) {
+    if (!s || typeof s !== 'object') return null;
+    var n = clamp(s.n, 3, 7, 5) | 0, total = n * n, cells = [];
+    for (var i = 0; i < total; i++) {
+      var c = (Array.isArray(s.cells) && s.cells[i]) || {};
+      cells.push({ t: typeof c.t === 'string' ? c.t.slice(0, 120) : '', m: safeUrl(c.m), s: safeUrl(c.s) });
+    }
+    var marked = Array.isArray(s.marked) ? s.marked.filter(function (x, idx, arr) { return Number.isInteger(x) && x >= 0 && x < total && arr.indexOf(x) === idx; }) : [];
+    var y = s.style || {}, d = s.def || {}, b = s.bingo || {};
+    return {
+      gen: typeof s.gen === 'string' ? s.gen.slice(0, 40) : '0',
+      n: n, cells: cells, marked: marked, show: s.show !== false,
+      title: typeof s.title === 'string' ? s.title.slice(0, 80) : '',
+      style: {
+        cellbg: hex(y.cellbg, '#14161f'), alpha: clamp(y.alpha, 0, 1, 0.85), text: hex(y.text, '#ffffff'),
+        border: hex(y.border, '#ffffff'), accent: hex(y.accent, '#e5202e'), fontScale: clamp(y.fontScale, 0.5, 2, 1),
+        gap: clamp(y.gap, 0, 30, 6), radius: clamp(y.radius, 0, 40, 8), bw: clamp(y.bw, 0, 10, 2)
+      },
+      def: { m: safeUrl(d.m), s: safeUrl(d.s) },
+      dur: clamp(s.dur, 0.5, 30, 3), vol: clamp(s.vol, 0, 1, 0.8),
+      bingo: { m: safeUrl(b.m), s: safeUrl(b.s), dur: clamp(b.dur, 0.5, 60, 5) }
+    };
+  }
+
+  // ---------- render ----------
+  var wrap = document.getElementById('wrap'), titleEl = document.getElementById('title'), board = document.getElementById('board'),
+      grid = document.getElementById('grid'), linesSvg = document.getElementById('lines'), boardMedia = document.getElementById('boardmedia');
+  var SVGNS = 'http://www.w3.org/2000/svg';
+  var cur = null, cellEls = [], cellAnim = {}, cellStop = {}, drawnLines = {}, boardBusy = Promise.resolve(), geo = null;
+
+  function apply(st, animate) {
+    var structural = !cur || cur.gen !== st.gen || cur.n !== st.n;
+    var prev = cur;
+    cur = st;
+    var r = document.documentElement.style, y = st.style;
+    r.setProperty('--cellbg', rgba(y.cellbg, y.alpha)); r.setProperty('--text', y.text); r.setProperty('--border', y.border);
+    r.setProperty('--accent', y.accent); r.setProperty('--radius', y.radius + 'px'); r.setProperty('--bw', y.bw + 'px');
+    wrap.classList.toggle('hidden', !st.show);
+    titleEl.textContent = st.title; titleEl.style.display = st.title ? 'block' : 'none';
+
+    if (structural) { buildGrid(st); animate = false; }
+    else {
+      var textChanged = false;
+      for (var i = 0; i < st.cells.length; i++) if (prev.cells[i].t !== st.cells[i].t) { cellEls[i].txt.textContent = st.cells[i].t; textChanged = true; }
+      if (textChanged || prev.style.fontScale !== y.fontScale || prev.style.gap !== y.gap || prev.title !== st.title) layout();
+    }
+
+    var was = structural ? {} : toSet(prev.marked), now = toSet(st.marked);
+    Object.keys(was).forEach(function (k) { if (!now[k]) clearCell(+k); });
+    Object.keys(now).forEach(function (k) { if (!was[k]) { if (animate) playCell(+k); else showX(+k, false); } });
+
+    var want = {}; bingoLines(st.n, st.marked).forEach(function (l) { want[l.key] = l; });
+    Object.keys(drawnLines).forEach(function (k) { if (!want[k]) { drawnLines[k].remove(); delete drawnLines[k]; } });
+    var fresh = Object.keys(want).filter(function (k) { return !drawnLines[k]; }).map(function (k) { return want[k]; });
+    if (!fresh.length) return;
+    if (!animate) { fresh.forEach(function (l) { drawLine(l, false); }); return; }
+    fresh.forEach(function (l) { drawnLines[l.key] = placeholder(); });
+    var waits = [];
+    fresh.forEach(function (l) { l.cells.forEach(function (i) { if (cellAnim[i]) waits.push(cellAnim[i]); }); });
+    var gen = st.gen;
+    Promise.all(waits).then(function () {
+      if (!cur || cur.gen !== gen) return;
+      var live = fresh.filter(function (l) { return drawnLines[l.key] && drawnLines[l.key].placeholder; });
+      if (!live.length) return;
+      live.forEach(function (l) { drawnLines[l.key].remove(); drawLine(l, true); });
+      boardBusy = boardBusy.then(function () { return wait(700); }).then(function () { return playBoardMedia(gen); });
+    });
+  }
+
+  function placeholder() { return { placeholder: true, remove: function () { this.placeholder = false; } }; }
+  function toSet(a) { var o = {}; a.forEach(function (x) { o[x] = true; }); return o; }
+
+  function bingoLines(n, marked) {
+    var m = toSet(marked), out = [], r, c, ok, cells;
+    for (r = 0; r < n; r++) { cells = []; ok = true; for (c = 0; c < n; c++) { cells.push(r * n + c); if (!m[r * n + c]) ok = false; } if (ok) out.push({ key: 'r' + r, cells: cells }); }
+    for (c = 0; c < n; c++) { cells = []; ok = true; for (r = 0; r < n; r++) { cells.push(r * n + c); if (!m[r * n + c]) ok = false; } if (ok) out.push({ key: 'c' + c, cells: cells }); }
+    cells = []; ok = true; for (r = 0; r < n; r++) { cells.push(r * n + r); if (!m[r * n + r]) ok = false; } if (ok) out.push({ key: 'd0', cells: cells });
+    cells = []; ok = true; for (r = 0; r < n; r++) { cells.push(r * n + (n - 1 - r)); if (!m[r * n + (n - 1 - r)]) ok = false; } if (ok) out.push({ key: 'd1', cells: cells });
+    return out;
+  }
+
+  function buildGrid(st) {
+    Object.keys(cellStop).forEach(function (k) { cellStop[k](); });
+    cellAnim = {}; cellStop = {};
+    Object.keys(drawnLines).forEach(function (k) { drawnLines[k].remove(); }); drawnLines = {};
+    stopBoardMedia();
+    grid.innerHTML = ''; cellEls = [];
+    grid.style.gridTemplateColumns = 'repeat(' + st.n + ', 1fr)';
+    grid.style.gridTemplateRows = 'repeat(' + st.n + ', 1fr)';
+    st.cells.forEach(function (c) {
+      var el = document.createElement('div'); el.className = 'cell';
+      var txt = document.createElement('div'); txt.className = 'txt'; txt.textContent = c.t;
+      el.appendChild(txt); grid.appendChild(el);
+      cellEls.push({ el: el, txt: txt, x: null });
+    });
+    layout();
+  }
+
+  function layout() {
+    if (!cur) return;
+    var W = window.innerWidth, H = window.innerHeight, y = cur.style;
+    var th = 0;
+    if (cur.title) { var fs = Math.max(14, Math.min(W, H) * 0.07); titleEl.style.fontSize = fs + 'px'; titleEl.style.marginBottom = (fs * 0.25) + 'px'; th = fs * 1.45; }
+    var S = Math.max(60, Math.floor(Math.min(W, H - th)));
+    board.style.width = S + 'px'; board.style.height = S + 'px';
+    var gap = Math.round(S * y.gap / 500);
+    grid.style.gap = gap + 'px';
+    var n = cur.n, cs = (S - gap * (n - 1)) / n;
+    geo = { S: S, gap: gap, cs: cs, n: n };
+    linesSvg.setAttribute('viewBox', '0 0 ' + S + ' ' + S);
+    var base = cs * 0.2 * y.fontScale;
+    cellEls.forEach(function (c) { fitText(c, base, cs); });
+    Object.keys(drawnLines).forEach(function (k) { if (drawnLines[k].reposition) drawnLines[k].reposition(); });
+  }
+
+  function fitText(c, base, cs) {
+    var t = c.txt, size = base, inner = cs - 2 * cur.style.bw;
+    t.classList.remove('wrap');
+    t.style.fontSize = size + 'px';
+    var guard = 0;
+    while ((t.scrollHeight > inner + 1 || t.scrollWidth > inner + 1) && size > 7 && guard++ < 60) { size *= 0.92; t.style.fontSize = size + 'px'; }
+    if (t.scrollWidth > inner + 1) t.classList.add('wrap');
+  }
+
+  function showX(i, anim) {
+    var c = cellEls[i]; if (!c || c.x) return;
+    var svg = document.createElementNS(SVGNS, 'svg'); svg.setAttribute('class', 'x'); svg.setAttribute('viewBox', '0 0 100 100');
+    [[8, 8, 92, 92], [92, 8, 8, 92]].forEach(function (p, j) {
+      var ln = document.createElementNS(SVGNS, 'line');
+      ln.setAttribute('x1', p[0]); ln.setAttribute('y1', p[1]); ln.setAttribute('x2', p[2]); ln.setAttribute('y2', p[3]);
+      if (anim) { ln.setAttribute('pathLength', '1'); ln.setAttribute('class', 'draw' + (j ? ' d2' : '')); }
+      svg.appendChild(ln);
+    });
+    c.el.appendChild(svg); c.x = svg; c.el.classList.add('marked');
+  }
+
+  function clearCell(i) {
+    if (cellStop[i]) cellStop[i]();
+    var c = cellEls[i]; if (c && c.x) { c.x.remove(); c.x = null; } if (c) c.el.classList.remove('marked');
+  }
+
+  // odtwarza gif/obraz/film (+ opcjonalny dźwięk) w kontenerze; zwraca {done: Promise, stop: fn}
+  function playMedia(box, url, sound, dur) {
+    var stopped = false, el, audio, timer, resolveFn;
+    var done = new Promise(function (r) { resolveFn = r; });
+    function finish() {
+      if (stopped) return; stopped = true; clearTimeout(timer);
+      if (el && el.pause) { try { el.pause(); } catch (e) {} }
+      if (audio) { try { audio.pause(); } catch (e) {} }
+      box.innerHTML = ''; box.classList.remove('on');
+      if (box === boardMedia) box.style.display = 'none';
+      resolveFn();
+    }
+    var vol = PREVIEW ? 0 : cur.vol;
+    function tryPlay(m) { var p = m.play && m.play(); if (p && p.catch) p.catch(function () { m.muted = true; var q = m.play(); if (q && q.catch) q.catch(function () {}); }); }
+    if (url && isVideo(url)) {
+      el = document.createElement('video'); el.playsInline = true; el.preload = 'auto'; el.volume = vol; el.muted = vol === 0;
+      el.onended = finish; el.onerror = finish; el.src = url;
+      timer = setTimeout(finish, Math.max(dur, 30) * 1000);
+      el.addEventListener('loadedmetadata', function () {
+        clearTimeout(timer);
+        var len = isFinite(el.duration) && el.duration > 0 ? el.duration : dur;
+        timer = setTimeout(finish, Math.min(len + 0.3, 60) * 1000);
+      });
+    } else if (url) {
+      el = document.createElement('img'); el.alt = ''; el.onerror = finish;
+      el.src = url + (url.indexOf('#') < 0 ? '#' : '&') + 'r=' + Date.now(); // wymusza start gifa od początku
+      timer = setTimeout(finish, dur * 1000);
+    } else {
+      timer = setTimeout(finish, dur * 1000);
+    }
+    if (el) { box.appendChild(el); box.classList.add('on'); if (box === boardMedia) box.style.display = 'block'; if (el.tagName === 'VIDEO') tryPlay(el); }
+    if (sound) { audio = new Audio(sound); audio.volume = vol; audio.muted = vol === 0; tryPlay(audio); }
+    return { done: done, stop: finish };
+  }
+
+  function playCell(i) {
+    var c = cellEls[i]; if (!c) return;
+    clearCell(i);
+    var cell = cur.cells[i], url = cell.m || cur.def.m, sound = cell.m ? cell.s : (cell.s || cur.def.s);
+    if (!url && !sound) { showX(i, true); cellAnim[i] = wait(550); return; }
+    var box = document.createElement('div'); box.className = 'media'; c.el.appendChild(box);
+    var p = playMedia(box, url, sound, url ? cur.dur : Math.min(cur.dur, 1.5));
+    var gen = cur.gen, cancelled = false;
+    cellStop[i] = function () { cancelled = true; p.stop(); };
+    cellAnim[i] = p.done.then(function () {
+      box.remove(); delete cellStop[i];
+      if (cancelled || !cur || cur.gen !== gen) return;
+      if (cur.marked.indexOf(i) >= 0) { showX(i, true); return wait(550); }
+    });
+  }
+
+  function drawLine(l, anim) {
+    var ln = document.createElementNS(SVGNS, 'line');
+    function pos() {
+      if (!geo) return;
+      var a = l.cells[0], b = l.cells[l.cells.length - 1], n = geo.n, step = geo.cs + geo.gap;
+      var x1 = (a % n) * step + geo.cs / 2, y1 = Math.floor(a / n) * step + geo.cs / 2;
+      var x2 = (b % n) * step + geo.cs / 2, y2 = Math.floor(b / n) * step + geo.cs / 2;
+      var dx = x2 - x1, dy = y2 - y1, len = Math.sqrt(dx * dx + dy * dy) || 1, ext = geo.cs * 0.38;
+      ln.setAttribute('x1', x1 - dx / len * ext); ln.setAttribute('y1', y1 - dy / len * ext);
+      ln.setAttribute('x2', x2 + dx / len * ext); ln.setAttribute('y2', y2 + dy / len * ext);
+      ln.setAttribute('stroke-width', Math.max(4, geo.cs * 0.09));
+    }
+    pos();
+    if (anim) { ln.setAttribute('pathLength', '1'); ln.setAttribute('class', 'draw'); }
+    linesSvg.appendChild(ln);
+    drawnLines[l.key] = { remove: function () { ln.remove(); }, reposition: pos };
+  }
+
+  var boardStop = null;
+  function stopBoardMedia() { if (boardStop) { boardStop(); boardStop = null; } }
+  function playBoardMedia(gen) {
+    if (!cur || cur.gen !== gen) return;
+    var b = cur.bingo; if (!b.m && !b.s) return;
+    stopBoardMedia();
+    var p = playMedia(boardMedia, b.m, b.s, b.dur);
+    boardStop = p.stop;
+    return p.done.then(function () { boardStop = null; });
+  }
+
+  window.addEventListener('resize', layout);
+  window.addEventListener('hashchange', function () { location.reload(); });
+})();
+</script>
+</body>
+</html>

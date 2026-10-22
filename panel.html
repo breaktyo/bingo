@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="pl">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<meta name="referrer" content="no-referrer">
+<title>Bingo – panel moderatora</title>
+<style>
+  :root { --bg:#0f1117; --panel:#181b24; --line:#2a2f3d; --text:#e8eaf0; --muted:#9aa1b2; --acc:#e5202e; --ok:#22c55e; --warn:#f59e0b; --btn:#262b38; }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text); font: 15px/1.45 system-ui, "Segoe UI", Roboto, Arial, sans-serif; }
+  header { position: sticky; top: 0; z-index: 5; background: var(--panel); border-bottom: 1px solid var(--line); padding: 10px 16px; display: flex; flex-wrap: wrap; gap: 8px 16px; align-items: center; }
+  header h1 { font-size: 17px; margin: 0; margin-right: auto; }
+  .chip { font-size: 13px; padding: 3px 10px; border-radius: 99px; background: var(--btn); color: var(--muted); white-space: nowrap; }
+  .chip.ok { background: rgba(34,197,94,.15); color: var(--ok); }
+  .chip.bad { background: rgba(229,32,46,.15); color: #ff6b75; }
+  .chip.warn { background: rgba(245,158,11,.15); color: var(--warn); }
+  nav { display: flex; gap: 4px; padding: 10px 16px 0; max-width: 1100px; margin: 0 auto; overflow-x: auto; }
+  nav button { background: none; border: 0; color: var(--muted); padding: 8px 14px; border-radius: 8px 8px 0 0; font: inherit; cursor: pointer; white-space: nowrap; }
+  nav button.on { background: var(--panel); color: var(--text); }
+  main { max-width: 1100px; margin: 0 auto; padding: 0 16px 40px; }
+  section.tab { display: none; background: var(--panel); border-radius: 0 10px 10px 10px; padding: 16px; }
+  section.tab.on { display: block; }
+  h2 { font-size: 15px; margin: 18px 0 8px; color: var(--muted); font-weight: 600; text-transform: uppercase; letter-spacing: .04em; }
+  h2:first-child { margin-top: 0; }
+  button.b { background: var(--btn); color: var(--text); border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px; font: inherit; cursor: pointer; }
+  button.b:hover { border-color: #3d4456; }
+  button.b.red { background: var(--acc); border-color: var(--acc); color: #fff; }
+  .row { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; margin: 10px 0; }
+  label.f { display: flex; flex-direction: column; gap: 4px; font-size: 13px; color: var(--muted); }
+  input[type=text], input[type=url], input[type=number], select, textarea { background: #0d0f15; color: var(--text); border: 1px solid var(--line); border-radius: 7px; padding: 7px 9px; font: inherit; width: 100%; }
+  textarea { resize: vertical; }
+  input[type=color] { width: 54px; height: 34px; border: 1px solid var(--line); border-radius: 7px; background: #0d0f15; padding: 2px; }
+  .fields { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
+  .hint { color: var(--muted); font-size: 13px; margin: 6px 0; }
+  .box { border: 1px solid var(--line); border-radius: 9px; padding: 12px; margin: 10px 0; }
+  .warnbox { border-color: rgba(245,158,11,.5); background: rgba(245,158,11,.07); }
+
+  #pgrid { display: grid; gap: 6px; width: min(100%, 640px); aspect-ratio: 1; margin: 6px 0 12px; }
+  #pgrid button { position: relative; background: #222736; border: 2px solid #343a4c; color: var(--text); border-radius: 8px; padding: 4px; font: 600 clamp(10px, 1.6vw, 14px)/1.15 system-ui, sans-serif; cursor: pointer; overflow: hidden; word-break: break-word; }
+  #pgrid button:hover { border-color: #59617a; }
+  #pgrid button.m { border-color: var(--acc); background: #3a1a20; }
+  #pgrid button.m::after { content: "✕"; position: absolute; inset: 0; display: flex; align-items: center; justify-content: center; color: var(--acc); font-size: 2.6em; opacity: .55; pointer-events: none; }
+  #pgrid button.fx::before { content: "🎬"; position: absolute; top: 2px; right: 4px; font-size: 11px; opacity: .8; }
+  .gamewrap { display: flex; flex-wrap: wrap; gap: 20px; align-items: flex-start; }
+  .gamewrap > div:first-child { flex: 1 1 360px; }
+  #previewWrap { flex: 1 1 300px; display: none; }
+  #previewWrap iframe { width: 100%; aspect-ratio: 1; border: 1px dashed var(--line); border-radius: 8px; background: repeating-conic-gradient(#1b1e28 0 25%, #232735 0 50%) 0 0/24px 24px; }
+
+  table.cells { width: 100%; border-collapse: collapse; }
+  table.cells th { text-align: left; font-size: 12px; color: var(--muted); font-weight: 600; padding: 4px; }
+  table.cells td { padding: 3px 4px; vertical-align: top; }
+  table.cells td.n { color: var(--muted); font-size: 12px; width: 32px; padding-top: 10px; }
+  @media (max-width: 700px) {
+    table.cells thead { display: none; }
+    table.cells tr { display: grid; grid-template-columns: 32px 1fr; gap: 4px; padding: 6px 0; border-bottom: 1px solid var(--line); }
+    table.cells td { padding: 0; }
+    table.cells td.n { grid-row: span 3; }
+  }
+  .linkout { font-family: ui-monospace, Consolas, monospace; font-size: 12px; word-break: break-all; }
+  .toast { position: fixed; left: 50%; bottom: 20px; transform: translateX(-50%); background: #2c3242; color: #fff; padding: 8px 16px; border-radius: 8px; opacity: 0; transition: opacity .25s; pointer-events: none; z-index: 20; }
+  .toast.on { opacity: 1; }
+</style>
+</head>
+<body>
+<header>
+  <h1>🎯 Bingo – panel moderatora</h1>
+  <span class="chip" id="stBrokers">Serwery: –</span>
+  <span class="chip" id="stOverlay">Overlay: –</span>
+  <span class="chip" id="stVisible">–</span>
+</header>
+<nav id="tabs">
+  <button data-t="game" class="on">Gra</button>
+  <button data-t="board">Plansza i hasła</button>
+  <button data-t="look">Wygląd i efekty</button>
+  <button data-t="link">Link i klucze</button>
+</nav>
+<main>
+  <!-- GRA -->
+  <section class="tab on" id="t-game">
+    <div class="gamewrap">
+      <div>
+        <h2>Kliknij hasło, żeby je zakreślić (drugie kliknięcie cofa)</h2>
+        <div id="pgrid"></div>
+        <div class="row">
+          <button class="b" id="btnShow">Ukryj planszę na streamie</button>
+          <button class="b" id="btnClear">Wyczyść wszystkie zaznaczenia</button>
+          <label class="row" style="margin:0;gap:6px;color:var(--muted)"><input type="checkbox" id="chkPreview"> Podgląd overlayu (bez dźwięku)</label>
+        </div>
+        <div class="hint" id="bingoInfo"></div>
+      </div>
+      <div id="previewWrap">
+        <h2>Podgląd (to samo co na streamie)</h2>
+        <iframe id="preview" title="Podgląd" allow="autoplay"></iframe>
+      </div>
+    </div>
+  </section>
+
+  <!-- PLANSZA -->
+  <section class="tab" id="t-board">
+    <h2>Plansza</h2>
+    <div class="fields">
+      <label class="f">Rozmiar planszy
+        <select id="size"><option value="3">3 × 3</option><option value="4">4 × 4</option><option value="5">5 × 5</option><option value="6">6 × 6</option><option value="7">7 × 7</option></select>
+      </label>
+      <label class="f" style="grid-column: span 2">Tytuł nad planszą (opcjonalnie)
+        <input type="text" id="title" maxlength="80" placeholder="np. BINGO STREAMA">
+      </label>
+    </div>
+    <h2>Wklej hasła hurtem</h2>
+    <textarea id="bulk" rows="5" placeholder="Jedno hasło w linii, po kolei od lewego górnego rogu"></textarea>
+    <div class="row">
+      <button class="b" id="btnBulk">Wstaw do planszy</button>
+      <button class="b" id="btnShuffle">Wymieszaj kolejność pól</button>
+    </div>
+    <h2>Pola</h2>
+    <p class="hint">GIF/film i dźwięk są opcjonalne. Puste = użyje domyślnego efektu z zakładki „Wygląd i efekty”. Zmiany od razu trafiają na stream – jeśli chcesz edytować po cichu, najpierw ukryj planszę.</p>
+    <table class="cells">
+      <thead><tr><th>#</th><th>Hasło</th><th>GIF / film (link)</th><th>Dźwięk (link, opcjonalnie)</th></tr></thead>
+      <tbody id="cellRows"></tbody>
+    </table>
+  </section>
+
+  <!-- WYGLĄD -->
+  <section class="tab" id="t-look">
+    <h2>Wygląd</h2>
+    <div class="fields">
+      <label class="f">Tło pól <input type="color" id="s_cellbg"></label>
+      <label class="f">Przezroczystość tła pól <input type="range" id="s_alpha" min="0" max="1" step="0.05"></label>
+      <label class="f">Kolor tekstu <input type="color" id="s_text"></label>
+      <label class="f">Kolor ramek <input type="color" id="s_border"></label>
+      <label class="f">Kolor X i linii bingo <input type="color" id="s_accent"></label>
+      <label class="f">Wielkość tekstu <input type="range" id="s_fontScale" min="0.5" max="2" step="0.05"></label>
+      <label class="f">Grubość ramek <input type="range" id="s_bw" min="0" max="10" step="1"></label>
+      <label class="f">Odstęp między polami <input type="range" id="s_gap" min="0" max="30" step="1"></label>
+      <label class="f">Zaokrąglenie rogów <input type="range" id="s_radius" min="0" max="40" step="1"></label>
+    </div>
+
+    <h2>Efekt po zakreśleniu pola</h2>
+    <p class="hint">Odtwarza się tylko wewnątrz kwadratu hasła, potem pojawia się czerwony X. Podaj <b>bezpośredni</b> link do pliku (.gif, .webp, .png, .mp4, .webm), zaczynający się od https://. Film gra do końca (maks. 60 s), GIF tyle sekund, ile ustawisz.</p>
+    <div class="fields">
+      <label class="f" style="grid-column: span 2">Domyślny GIF / film <input type="url" id="def_m" placeholder="https://…/efekt.gif"></label>
+      <label class="f" style="grid-column: span 2">Domyślny dźwięk (opcjonalnie) <input type="url" id="def_s" placeholder="https://…/dzwiek.mp3"></label>
+      <label class="f">Czas wyświetlania GIF-a (s) <input type="number" id="dur" min="0.5" max="30" step="0.5"></label>
+      <label class="f">Głośność <input type="range" id="vol" min="0" max="1" step="0.05"></label>
+    </div>
+
+    <h2>Efekt BINGO (na całą planszę)</h2>
+    <p class="hint">Gdy ułoży się cały rząd, kolumna lub przekątna: pojawia się czerwona linia, a potem ten efekt na całą planszę.</p>
+    <div class="fields">
+      <label class="f" style="grid-column: span 2">GIF / film BINGO <input type="url" id="bingo_m" placeholder="https://…/bingo.mp4"></label>
+      <label class="f" style="grid-column: span 2">Dźwięk BINGO (opcjonalnie) <input type="url" id="bingo_s" placeholder="https://…/bingo.mp3"></label>
+      <label class="f">Czas GIF-a BINGO (s) <input type="number" id="bingo_dur" min="0.5" max="60" step="0.5"></label>
+    </div>
+  </section>
+
+  <!-- LINK -->
+  <section class="tab" id="t-link">
+    <h2>Link do overlayu</h2>
+    <p class="hint">Wklej go w swoim narzędziu do overlaya jako element „strona www / iframe / URL” (albo jako źródło przeglądarki w OBS). Polecany rozmiar: kwadrat, np. 800 × 800 (z tytułem trochę wyższy).</p>
+    <div class="box">
+      <div class="linkout" id="linkOut"></div>
+      <div class="row"><button class="b red" id="btnCopy">Kopiuj link</button></div>
+    </div>
+    <div class="box warnbox hint" id="linkWarn" style="display:none"></div>
+    <p class="hint">Link pozwala tylko <b>oglądać</b> planszę. Sterować nią może wyłącznie ta przeglądarka (klucz do podpisywania jest zapisany tylko tutaj). Mimo to nie wrzucaj linku na czat.</p>
+
+    <h2>Adres pliku overlay.html</h2>
+    <input type="url" id="overlayBase">
+    <p class="hint">Uzupełnia się sam, jeśli panel i overlay leżą w tym samym miejscu.</p>
+
+    <h2>Kopia zapasowa</h2>
+    <p class="hint">Plik kopii zawiera klucz sterujący i całą planszę. Przyda się, gdy zmienisz komputer lub wyczyścisz przeglądarkę – bez niego trzeba będzie wygenerować nowy link. <b>Nie wysyłaj go nikomu</b>, bo kto go ma, ten może sterować overlayem.</p>
+    <div class="row">
+      <button class="b" id="btnExport">Pobierz kopię (.json)</button>
+      <button class="b" id="btnImport">Wczytaj kopię</button>
+      <input type="file" id="fileImport" accept="application/json,.json" hidden>
+    </div>
+
+    <h2>Nowe klucze</h2>
+    <p class="hint">Użyj, jeśli podejrzewasz, że ktoś zdobył kopię zapasową. Stary link przestanie działać i trzeba będzie wkleić nowy.</p>
+    <button class="b" id="btnNewKeys">Wygeneruj nowe klucze i link</button>
+
+    <h2>Serwery przekazujące (zaawansowane)</h2>
+    <p class="hint">Publiczne serwery MQTT, przez które idą zaszyfrowane i podpisane wiadomości. Jeden w linii. Po zmianie trzeba ponownie wkleić link.</p>
+    <textarea id="brokers" rows="3"></textarea>
+    <div class="row"><button class="b" id="btnBrokers">Zapisz serwery</button></div>
+  </section>
+</main>
+<div class="toast" id="toast"></div>
+
+<script src="mqtt.min.js"></script>
+<script>
+(function () {
+  'use strict';
+  var DEFAULT_BROKERS = ['wss://broker.emqx.io:8084/mqtt', 'wss://broker.hivemq.com:8884/mqtt', 'wss://test.mosquitto.org:8081/mqtt'];
+  var LS = 'kbingo_panel_v1';
+  var te = new TextEncoder(), td = new TextDecoder();
+  function $(id) { return document.getElementById(id); }
+  function b64u(buf) { var s = '', b = new Uint8Array(buf); for (var i = 0; i < b.length; i++) s += String.fromCharCode(b[i]); return btoa(s).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, ''); }
+  function unb64u(str) { str = str.replace(/-/g, '+').replace(/_/g, '/'); while (str.length % 4) str += '='; var s = atob(str), b = new Uint8Array(s.length); for (var i = 0; i < s.length; i++) b[i] = s.charCodeAt(i); return b; }
+  function rnd(n) { return b64u(crypto.getRandomValues(new Uint8Array(n))); }
+  function toast(t) { var e = $('toast'); e.textContent = t; e.classList.add('on'); clearTimeout(toast.t); toast.t = setTimeout(function () { e.classList.remove('on'); }, 1800); }
+
+  if (!window.crypto || !crypto.subtle) {
+    document.body.innerHTML = '<p style="padding:20px">Panel musi być otwarty przez <b>https://</b> (np. GitHub Pages), inaczej przeglądarka nie udostępnia szyfrowania.</p>';
+    return;
+  }
+
+  function defaultBoard() {
+    var cells = []; for (var i = 0; i < 25; i++) cells.push({ t: '', m: '', s: '' });
+    return {
+      gen: rnd(6), n: 5, cells: cells, marked: [], show: true, title: '',
+      style: { cellbg: '#14161f', alpha: 0.85, text: '#ffffff', border: '#ffffff', accent: '#e5202e', fontScale: 1, gap: 6, radius: 8, bw: 2 },
+      def: { m: '', s: '' }, dur: 3, vol: 0.8, bingo: { m: '', s: '', dur: 5 }
+    };
+  }
+
+  var S = null; // {keys:{ch,aes,pub,priv}, board, brokers, overlayBase}
+  try { S = JSON.parse(localStorage.getItem(LS)); } catch (e) {}
+  function save() { try { localStorage.setItem(LS, JSON.stringify(S)); } catch (e) { toast('Nie udało się zapisać w przeglądarce!'); } }
+
+  var privKey, aesKey, seq = 0, clients = [], acks = {}, pubChain = Promise.resolve();
+
+  function newKeys() {
+    return crypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']).then(function (kp) {
+      return Promise.all([crypto.subtle.exportKey('jwk', kp.privateKey), crypto.subtle.exportKey('raw', kp.publicKey)]);
+    }).then(function (r) { return { ch: rnd(16), aes: rnd(32), pub: b64u(r[1]), priv: r[0] }; });
+  }
+  function loadKeys() {
+    return Promise.all([
+      crypto.subtle.importKey('jwk', S.keys.priv, { name: 'ECDSA', namedCurve: 'P-256' }, false, ['sign']),
+      crypto.subtle.importKey('raw', unb64u(S.keys.aes), { name: 'AES-GCM' }, false, ['encrypt', 'decrypt'])
+    ]).then(function (k) { privKey = k[0]; aesKey = k[1]; });
+  }
+
+  function init() {
+    var p = Promise.resolve();
+    if (!S || !S.keys || !S.board) {
+      p = newKeys().then(function (k) { S = { keys: k, board: defaultBoard(), brokers: DEFAULT_BROKERS.slice(), overlayBase: '' }; save(); });
+    }
+    return p.then(loadKeys).then(function () { renderAll(); connect(); });
+  }
+
+  // ---------- połączenie ----------
+  function topic() { return 'kbingo/v1/' + S.keys.ch; }
+  function connect() {
+    clients.forEach(function (c) { try { c.end(true); } catch (e) {} });
+    clients = []; acks = {};
+    (S.brokers || DEFAULT_BROKERS).forEach(function (url) {
+      var c = mqtt.connect(url, { clientId: 'kbp_' + rnd(8), clean: true, reconnectPeriod: 4000, connectTimeout: 8000, keepalive: 30 });
+      c.on('connect', function () { c.subscribe(topic() + '/ack', { qos: 0 }); status(); publishNow(); });
+      c.on('close', status);
+      c.on('error', function () {});
+      c.on('message', function (t, payload) { onAck(payload); });
+      clients.push(c);
+    });
+    status();
+  }
+  function onAck(payload) {
+    var o; try { o = JSON.parse(td.decode(payload)); } catch (e) { return; }
+    if (!o || typeof o.iv !== 'string' || typeof o.ct !== 'string') return;
+    crypto.subtle.decrypt({ name: 'AES-GCM', iv: unb64u(o.iv), additionalData: te.encode(S.keys.ch + '|ack') }, aesKey, unb64u(o.ct)).then(function (pt) {
+      var a = JSON.parse(td.decode(pt));
+      if (a && typeof a.id === 'string') { acks[a.id] = { at: Date.now(), pv: !!a.pv, s: a.s }; status(); }
+    }).catch(function () {});
+  }
+  function status() {
+    var n = clients.filter(function (c) { return c.connected; }).length;
+    var b = $('stBrokers'); b.textContent = 'Serwery: ' + n + '/' + clients.length; b.className = 'chip ' + (n ? 'ok' : 'bad');
+    var now = Date.now(), live = 0, synced = 0;
+    Object.keys(acks).forEach(function (k) { var a = acks[k]; if (now - a.at < 25000 && !a.pv) { live++; if (a.s >= seq) synced++; } });
+    var o = $('stOverlay');
+    o.textContent = live ? 'Overlay: online (' + live + ')' : 'Overlay: nie wykryto';
+    o.className = 'chip ' + (live ? 'ok' : 'warn');
+    o.title = live ? 'Overlay jest otwarty (np. w OBS) i odbiera planszę.' : 'Żaden overlay nie jest teraz otwarty – to normalne, jeśli OBS jest wyłączony.';
+    var v = $('stVisible'); v.textContent = S.board.show ? 'Plansza: widoczna' : 'Plansza: ukryta'; v.className = 'chip ' + (S.board.show ? 'ok' : '');
+  }
+  setInterval(status, 5000);
+
+  var pubTimer = null;
+  function publishSoon() { save(); clearTimeout(pubTimer); pubTimer = setTimeout(publishNow, 250); }
+  function publishNow() {
+    clearTimeout(pubTimer);
+    save();
+    pubChain = pubChain.then(function () {
+      seq = Math.max(Date.now(), seq + 1);
+      var s = seq, iv = crypto.getRandomValues(new Uint8Array(12));
+      return crypto.subtle.encrypt({ name: 'AES-GCM', iv: iv, additionalData: te.encode(S.keys.ch + '|' + s) }, aesKey, te.encode(JSON.stringify(S.board))).then(function (ct) {
+        var ivs = b64u(iv), cts = b64u(ct);
+        return crypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, privKey, te.encode(S.keys.ch + '|' + s + '|' + ivs + '|' + cts)).then(function (sig) {
+          var msg = JSON.stringify({ s: s, iv: ivs, ct: cts, sig: b64u(sig) });
+          clients.forEach(function (c) { if (c.connected) c.publish(topic() + '/state', msg, { qos: 1, retain: true }); });
+        });
+      });
+    }).catch(function (e) { console.error(e); });
+  }
+  setInterval(publishNow, 30000); // odświeżanie, żeby overlay zawsze miał aktualny stan
+
+  // ---------- linie bingo (do informacji w panelu) ----------
+  function countBingo(n, marked) {
+    var m = {}; marked.forEach(function (x) { m[x] = 1; });
+    var cnt = 0, r, c, ok;
+    for (r = 0; r < n; r++) { ok = true; for (c = 0; c < n; c++) if (!m[r * n + c]) ok = false; if (ok) cnt++; }
+    for (c = 0; c < n; c++) { ok = true; for (r = 0; r < n; r++) if (!m[r * n + c]) ok = false; if (ok) cnt++; }
+    ok = true; for (r = 0; r < n; r++) if (!m[r * n + r]) ok = false; if (ok) cnt++;
+    ok = true; for (r = 0; r < n; r++) if (!m[r * n + n - 1 - r]) ok = false; if (ok) cnt++;
+    return cnt;
+  }
+
+  // ---------- render ----------
+  function overlayBase() {
+    if (S.overlayBase) return S.overlayBase;
+    try { return new URL('overlay.html', location.href).href.split('#')[0].split('?')[0]; } catch (e) { return ''; }
+  }
+  function overlayLink(preview) {
+    var h = 'c=' + S.keys.ch + '&k=' + S.keys.aes + '&p=' + S.keys.pub;
+    var br = S.brokers || DEFAULT_BROKERS;
+    if (br.join(',') !== DEFAULT_BROKERS.join(',')) h += '&b=' + br.map(encodeURIComponent).join(',');
+    if (preview) h += '&preview=1';
+    return overlayBase() + '#' + h;
+  }
+
+  function renderGrid() {
+    var B = S.board, g = $('pgrid');
+    g.innerHTML = '';
+    g.style.gridTemplateColumns = 'repeat(' + B.n + ', 1fr)';
+    B.cells.forEach(function (c, i) {
+      var b = document.createElement('button');
+      b.textContent = c.t || ('(pole ' + (i + 1) + ')');
+      if (!c.t) b.style.color = 'var(--muted)';
+      if (B.marked.indexOf(i) >= 0) b.className = 'm';
+      if (c.m || c.s) b.classList.add('fx');
+      b.onclick = function () {
+        var k = B.marked.indexOf(i);
+        if (k >= 0) B.marked.splice(k, 1); else B.marked.push(i);
+        renderGrid(); publishNow();
+      };
+      g.appendChild(b);
+    });
+    var cnt = countBingo(B.n, B.marked);
+    $('bingoInfo').textContent = 'Zakreślone: ' + B.marked.length + ' / ' + (B.n * B.n) + (cnt ? ' · BINGO: ' + cnt + (cnt === 1 ? ' linia' : ' linie') : '');
+    $('btnShow').textContent = B.show ? 'Ukryj planszę na streamie' : 'Pokaż planszę na streamie';
+    status();
+  }
+
+  function renderCells() {
+    var B = S.board, tb = $('cellRows');
+    tb.innerHTML = '';
+    B.cells.forEach(function (c, i) {
+      var tr = document.createElement('tr');
+      var n = document.createElement('td'); n.className = 'n'; n.textContent = (i + 1) + '.'; tr.appendChild(n);
+      [['t', 'Hasło', 'text'], ['m', 'https://…/gif lub mp4', 'url'], ['s', 'https://…/dzwiek.mp3', 'url']].forEach(function (f) {
+        var td_ = document.createElement('td'), inp = document.createElement('input');
+        inp.type = f[2]; inp.placeholder = f[1]; inp.value = c[f[0]] || ''; if (f[0] === 't') inp.maxLength = 120;
+        inp.oninput = function () { c[f[0]] = inp.value; renderGrid(); publishSoon(); };
+        td_.appendChild(inp); tr.appendChild(td_);
+      });
+      tb.appendChild(tr);
+    });
+  }
+
+  function bindLook() {
+    var B = S.board;
+    ['cellbg', 'alpha', 'text', 'border', 'accent', 'fontScale', 'bw', 'gap', 'radius'].forEach(function (k) {
+      var el = $('s_' + k); el.value = B.style[k];
+      el.oninput = function () { B.style[k] = el.type === 'color' ? el.value : Number(el.value); publishSoon(); };
+    });
+    [['def_m', B.def, 'm'], ['def_s', B.def, 's'], ['bingo_m', B.bingo, 'm'], ['bingo_s', B.bingo, 's']].forEach(function (x) {
+      var el = $(x[0]); el.value = x[1][x[2]] || '';
+      el.oninput = function () { x[1][x[2]] = el.value.trim(); publishSoon(); };
+    });
+    $('dur').value = B.dur; $('dur').oninput = function () { B.dur = Number($('dur').value) || 3; publishSoon(); };
+    $('bingo_dur').value = B.bingo.dur; $('bingo_dur').oninput = function () { B.bingo.dur = Number($('bingo_dur').value) || 5; publishSoon(); };
+    $('vol').value = B.vol; $('vol').oninput = function () { B.vol = Number($('vol').value); publishSoon(); };
+    $('size').value = B.n; $('title').value = B.title || '';
+  }
+
+  function renderLink() {
+    $('linkOut').textContent = overlayLink(false);
+    $('overlayBase').value = overlayBase();
+    $('brokers').value = (S.brokers || DEFAULT_BROKERS).join('\n');
+    var w = $('linkWarn'), base = overlayBase();
+    if (!/^https:\/\//i.test(base) && !/^http:\/\/(localhost|127\.0\.0\.1)/i.test(base)) {
+      w.style.display = 'block';
+      w.textContent = 'Uwaga: adres overlayu nie zaczyna się od https://. Wrzuć pliki na hosting (np. GitHub Pages – instrukcja w README) i otwórz panel stamtąd, albo wpisz poniżej adres overlay.html.';
+    } else w.style.display = 'none';
+    if ($('chkPreview').checked) $('preview').src = overlayLink(true);
+  }
+
+  function renderAll() { renderGrid(); renderCells(); bindLook(); renderLink(); }
+
+  // ---------- akcje ----------
+  document.querySelectorAll('#tabs button').forEach(function (b) {
+    b.onclick = function () {
+      document.querySelectorAll('#tabs button').forEach(function (x) { x.classList.toggle('on', x === b); });
+      document.querySelectorAll('section.tab').forEach(function (s) { s.classList.toggle('on', s.id === 't-' + b.dataset.t); });
+    };
+  });
+  $('btnShow').onclick = function () { S.board.show = !S.board.show; renderGrid(); publishNow(); };
+  $('btnClear').onclick = function () {
+    if (!S.board.marked.length || !confirm('Wyczyścić wszystkie zaznaczenia?')) return;
+    S.board.marked = []; renderGrid(); publishNow();
+  };
+  $('chkPreview').onchange = function () {
+    var on = $('chkPreview').checked;
+    $('previewWrap').style.display = on ? 'block' : 'none';
+    $('preview').src = on ? overlayLink(true) : 'about:blank';
+  };
+  $('size').onchange = function () {
+    var n = Number($('size').value), B = S.board;
+    if (B.marked.length && !confirm('Zmiana rozmiaru wyczyści zaznaczenia. Kontynuować?')) { $('size').value = B.n; return; }
+    var cells = []; for (var i = 0; i < n * n; i++) cells.push(B.cells[i] || { t: '', m: '', s: '' });
+    B.n = n; B.cells = cells; B.marked = []; B.gen = rnd(6);
+    renderGrid(); renderCells(); publishNow();
+  };
+  $('title').oninput = function () { S.board.title = $('title').value; publishSoon(); };
+  $('btnBulk').onclick = function () {
+    var lines = $('bulk').value.split('\n').map(function (l) { return l.trim(); }).filter(Boolean), B = S.board, total = B.n * B.n;
+    if (!lines.length) return;
+    if (lines.length > total && !confirm('Masz ' + lines.length + ' haseł, a plansza ma ' + total + ' pól. Wstawić pierwsze ' + total + '? (Albo zwiększ rozmiar planszy.)')) return;
+    for (var i = 0; i < total; i++) B.cells[i].t = lines[i] || '';
+    B.marked = []; B.gen = rnd(6);
+    renderGrid(); renderCells(); publishNow(); toast('Wstawiono hasła');
+  };
+  $('btnShuffle').onclick = function () {
+    var B = S.board;
+    if (B.marked.length && !confirm('Mieszanie wyczyści zaznaczenia. Kontynuować?')) return;
+    for (var i = B.cells.length - 1; i > 0; i--) { var j = crypto.getRandomValues(new Uint32Array(1))[0] % (i + 1); var t = B.cells[i]; B.cells[i] = B.cells[j]; B.cells[j] = t; }
+    B.marked = []; B.gen = rnd(6);
+    renderGrid(); renderCells(); publishNow(); toast('Wymieszano');
+  };
+  $('btnCopy').onclick = function () {
+    var t = overlayLink(false);
+    (navigator.clipboard ? navigator.clipboard.writeText(t) : Promise.reject()).then(function () { toast('Skopiowano link'); }, function () {
+      var r = document.createRange(); r.selectNodeContents($('linkOut')); var s = getSelection(); s.removeAllRanges(); s.addRange(r); toast('Zaznaczono – skopiuj Ctrl+C');
+    });
+  };
+  $('overlayBase').onchange = function () { S.overlayBase = $('overlayBase').value.trim().split('#')[0]; save(); renderLink(); };
+  $('btnBrokers').onclick = function () {
+    var list = $('brokers').value.split('\n').map(function (l) { return l.trim(); }).filter(function (l) { return /^wss?:\/\//i.test(l); });
+    if (!list.length) { toast('Podaj co najmniej jeden adres wss://'); return; }
+    S.brokers = list; save(); connect(); renderLink(); toast('Zapisano – wklej nowy link do overlaya');
+  };
+  $('btnExport').onclick = function () {
+    var blob = new Blob([JSON.stringify({ kbingo: 1, data: S }, null, 1)], { type: 'application/json' });
+    var a = document.createElement('a'); a.href = URL.createObjectURL(blob); a.download = 'bingo-kopia-' + new Date().toISOString().slice(0, 10) + '.json';
+    document.body.appendChild(a); a.click(); a.remove(); setTimeout(function () { URL.revokeObjectURL(a.href); }, 1000);
+  };
+  $('btnImport').onclick = function () { $('fileImport').click(); };
+  $('fileImport').onchange = function () {
+    var f = $('fileImport').files[0]; if (!f) return;
+    f.text().then(function (txt) {
+      var o = JSON.parse(txt);
+      if (!o || o.kbingo !== 1 || !o.data || !o.data.keys || !o.data.board) throw new Error('zły plik');
+      if (!confirm('Wczytać kopię? Obecne ustawienia w tej przeglądarce zostaną zastąpione.')) return;
+      S = o.data; save();
+      return loadKeys().then(function () { renderAll(); connect(); toast('Wczytano kopię'); });
+    }).catch(function () { toast('To nie jest poprawny plik kopii'); });
+    $('fileImport').value = '';
+  };
+  $('btnNewKeys').onclick = function () {
+    if (!confirm('Na pewno? Stary link do overlayu przestanie działać i trzeba będzie wkleić nowy.')) return;
+    newKeys().then(function (k) { S.keys = k; save(); return loadKeys(); }).then(function () { renderLink(); connect(); toast('Nowe klucze – skopiuj nowy link'); });
+  };
+
+  init().catch(function (e) { console.error(e); toast('Błąd uruchamiania panelu'); });
+})();
+</script>
+</body>
+</html>
